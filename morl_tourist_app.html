@@ -1,0 +1,1640 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>MORL Kerala Route Planner</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    input[type=range] { accent-color: var(--primary, #6366f1); width: 100%; }
+    .tab-btn.active { border-bottom: 2.5px solid var(--primary, #6366f1); color: var(--primary, #6366f1); }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 9999px; font-size: 11px; font-weight: 600; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spin { animation: spin .7s linear infinite; display: inline-block; }
+    select, option { background: var(--card); color: var(--foreground); }
+    .action-btn { padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 600; border: 1px solid var(--border); cursor: pointer; transition: all .15s; }
+    .action-btn:hover { border-color: var(--primary); color: var(--primary); }
+    .action-btn.danger:hover { border-color: #ef4444; color: #ef4444; }
+    .action-btn.success { border-color: #22c55e; color: #22c55e; }
+    .action-btn.success:hover { background: color-mix(in srgb, #22c55e 15%, transparent); }
+    .poi-card:hover { border-color: var(--primary, #6366f1); background: color-mix(in srgb, var(--primary) 6%, var(--card)); }
+    .toast { position: fixed; bottom: 20px; right: 20px; z-index: 999; padding: 10px 18px; border-radius: 10px; font-size: 13px; font-weight: 600; box-shadow: 0 4px 20px rgba(0,0,0,.25); animation: slideUp .3s ease; }
+    @keyframes slideUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 100; display: flex; align-items: center; justify-content: center; }
+    .modal-box { background: var(--card); border: 1px solid var(--border); border-radius: 16px; width: 500px; max-height: 70vh; overflow: hidden; display: flex; flex-direction: column; }
+    .bar { transition: width .55s cubic-bezier(.4,0,.2,1); }
+    #mapContainer { position: relative; overflow: hidden; user-select: none; min-height: 560px; height: 560px; border-radius: 12px; }
+    #mapCanvas { cursor: grab; }
+    #mapCanvas:active { cursor: grabbing; }
+    .map-tool-btn { background: var(--card); border: 1px solid var(--border); border-radius: 8px; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; font-weight: bold; cursor: pointer; transition: all .15s; box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
+    .map-tool-btn:hover { border-color: var(--primary); color: var(--primary); }
+    #tooltip { position: absolute; pointer-events: none; z-index: 20; background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; font-size: 11px; box-shadow: 0 4px 15px rgba(0,0,0,0.25); display: none; }
+  </style>
+</head>
+<body class="bg-[var(--background)] text-[var(--foreground)] antialiased">
+
+<!-- HEADER -->
+<header class="sticky top-0 z-40 bg-[var(--card)] border-b border-[var(--border)] px-5 py-2.5 flex items-center justify-between shadow-sm">
+  <div class="flex items-center gap-3">
+    <span class="text-2xl">🌴</span>
+    <div>
+      <h1 class="font-bold text-sm leading-tight sm:text-base">MORL Tourist Route Planner</h1>
+      <p class="text-xs text-[var(--muted-foreground)]">Multi-Objective RL with Start/End Routing &amp; Mid-Trip Re-planning</p>
+    </div>
+  </div>
+  <div class="flex gap-2 items-center">
+    <span class="badge" style="background:color-mix(in srgb,var(--primary) 15%,transparent);color:var(--primary)">Dueling MO-DQN</span>
+    <span id="statusBadge" class="badge" style="background:color-mix(in srgb,#22c55e 15%,transparent);color:#22c55e">Ready</span>
+  </div>
+</header>
+
+<!-- ADD-DESTINATION MODAL -->
+<div id="addModal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <div class="px-5 py-3 border-b border-[var(--border)] flex items-center justify-between">
+      <h3 class="font-semibold text-sm">➕ Add Destination <span id="modalInsertLabel" class="text-[var(--muted-foreground)] font-normal text-xs"></span></h3>
+      <button onclick="closeModal()" class="text-[var(--muted-foreground)] hover:text-[var(--foreground)] text-lg leading-none">✕</button>
+    </div>
+    <div class="px-4 py-2 border-b border-[var(--border)]">
+      <input id="modalSearch" type="text" placeholder="🔍 Search destinations in this region…" oninput="renderModalList()"
+        class="w-full text-xs bg-[var(--background)] border border-[var(--border)] rounded-lg px-3 py-1.5 outline-none focus:border-[var(--primary)]">
+    </div>
+    <div id="modalList" class="overflow-y-auto flex-1 p-3 flex flex-col gap-1.5"></div>
+    <div class="px-4 py-2.5 border-t border-[var(--border)] text-xs text-[var(--muted-foreground)] flex justify-between items-center">
+      <span id="modalBudgetInfo"></span>
+      <button onclick="closeModal()" class="action-btn">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- MAIN LAYOUT -->
+<div class="flex" style="height:calc(100vh - 54px)">
+
+  <!-- SIDEBAR CONTROLS -->
+  <aside class="w-72 shrink-0 overflow-y-auto border-r border-[var(--border)] p-3 flex flex-col gap-3" style="background:var(--sidebar,var(--card));width:280px">
+
+    <!-- 1. REGION SELECTION -->
+    <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-3">
+      <label class="text-xs font-semibold block mb-1.5 flex items-center justify-between">
+        <span>📍 1. Select Region</span>
+      </label>
+      <select id="regionSelect" onchange="onRegionChange()" class="w-full text-xs border border-[var(--border)] rounded-lg px-2.5 py-1.5 font-medium">
+        <option value="trivandrum" selected>Trivandrum &amp; South Kerala</option>
+        <option value="kochi">Kochi &amp; Surroundings</option>
+        <option value="munnar">Munnar Hill Station</option>
+        <option value="backwaters">Alleppey Backwaters</option>
+        <option value="wayanad">Wayanad</option>
+        <option value="thrissur">Thrissur &amp; Athirapally</option>
+      </select>
+    </div>
+
+    <!-- 2. START & END DESTINATION -->
+    <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-3">
+      <h2 class="text-xs font-semibold mb-2 flex items-center gap-1.5">
+        <span>🚩 2. Start &amp; End Location</span>
+      </h2>
+      <div class="flex flex-col gap-2.5">
+        <div>
+          <label class="text-xs text-[var(--muted-foreground)] block mb-1 flex items-center gap-1">
+            <span class="inline-block w-2 h-2 rounded-full bg-emerald-500"></span> Start Point (Origin):
+          </label>
+          <select id="startSelect" onchange="onStartChange()" class="w-full text-xs border border-[var(--border)] rounded-lg px-2 py-1.5">
+            <!-- Populated dynamically based on region -->
+          </select>
+        </div>
+
+        <div>
+          <label class="text-xs text-[var(--muted-foreground)] block mb-1 flex items-center gap-1">
+            <span class="inline-block w-2 h-2 rounded-full bg-rose-500"></span> End Destination Mode:
+          </label>
+          <select id="endModeSelect" onchange="onEndModeChange()" class="w-full text-xs border border-[var(--border)] rounded-lg px-2 py-1.5 font-medium">
+            <option value="roundtrip" selected>🔄 Return to Start (Round Trip)</option>
+            <option value="specific">📍 Specific Final Destination</option>
+            <option value="open">⚡ Open-Ended (End at last visited POI)</option>
+          </select>
+        </div>
+
+        <div id="specificEndBox" class="hidden">
+          <label class="text-xs text-[var(--muted-foreground)] block mb-1">🏁 Choose Final Drop-off / End POI:</label>
+          <select id="endSelect" class="w-full text-xs border border-[var(--border)] rounded-lg px-2 py-1.5">
+            <!-- Populated dynamically -->
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3. TOURIST PROFILE -->
+    <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-3">
+      <h2 class="text-xs font-semibold mb-1.5">⚡ 3. Tourist Persona</h2>
+      <div class="grid grid-cols-2 gap-1.5">
+        <button onclick="applyProfile('luxury')"   class="text-xs px-2 py-1.5 rounded-lg border border-[var(--border)] hover:border-[var(--primary)] text-left flex items-center gap-1">💎 Luxury</button>
+        <button onclick="applyProfile('budget')"   class="text-xs px-2 py-1.5 rounded-lg border border-[var(--border)] hover:border-[var(--primary)] text-left flex items-center gap-1">🎒 Budget</button>
+        <button onclick="applyProfile('express')"  class="text-xs px-2 py-1.5 rounded-lg border border-[var(--border)] hover:border-[var(--primary)] text-left flex items-center gap-1">⚡ Express</button>
+        <button onclick="applyProfile('balanced')" class="text-xs px-2 py-1.5 rounded-lg border border-[var(--border)] hover:border-[var(--primary)] text-left flex items-center gap-1">⚖️ Balanced</button>
+      </div>
+    </div>
+
+    <!-- 4. PREFERENCE WEIGHTS -->
+    <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-3">
+      <h2 class="text-xs font-semibold mb-2">🎛️ 4. Preference Weights <span class="text-[var(--muted-foreground)] font-normal text-xs">(Σ=1)</span></h2>
+      <div class="flex flex-col gap-2">
+        <div>
+          <div class="flex justify-between text-xs mb-0.5"><span>w₁ Satisfaction</span><span id="w1val" class="font-mono font-bold" style="color:var(--primary)">0.50</span></div>
+          <input type="range" id="w1" min="0.01" max="0.98" step="0.01" value="0.50" oninput="normalizeW()">
+        </div>
+        <div>
+          <div class="flex justify-between text-xs mb-0.5"><span>w₂ Time Penalty</span><span id="w2val" class="font-mono font-bold" style="color:#f59e0b">0.25</span></div>
+          <input type="range" id="w2" min="0.01" max="0.98" step="0.01" value="0.25" oninput="normalizeW()" style="accent-color:#f59e0b">
+        </div>
+        <div>
+          <div class="flex justify-between text-xs mb-0.5"><span>w₃ Cost Penalty</span><span id="w3val" class="font-mono font-bold" style="color:#22c55e">0.25</span></div>
+          <input type="range" id="w3" min="0.01" max="0.98" step="0.01" value="0.25" oninput="normalizeW()" style="accent-color:#22c55e">
+        </div>
+      </div>
+      <div class="flex justify-center mt-2"><canvas id="triCanvas" width="100" height="90"></canvas></div>
+    </div>
+
+    <!-- 5. TIME & BUDGET CONSTRAINTS -->
+    <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-3">
+      <h2 class="text-xs font-semibold mb-2">📋 5. Trip Constraints</h2>
+      <div class="flex flex-col gap-2">
+        <div>
+          <div class="flex justify-between text-xs mb-0.5"><span>⏱ Max Tour Time</span><span id="tmaxLbl" class="font-mono font-semibold">10.0 hrs</span></div>
+          <input type="range" id="tmax" min="4" max="14" step="0.5" value="10" oninput="document.getElementById('tmaxLbl').textContent=this.value+' hrs'">
+        </div>
+        <div>
+          <div class="flex justify-between text-xs mb-0.5"><span>💰 Max Budget</span><span id="bmaxLbl" class="font-mono font-semibold">₹2000</span></div>
+          <input type="range" id="bmax" min="500" max="8000" step="100" value="2000" oninput="document.getElementById('bmaxLbl').textContent='₹'+this.value">
+        </div>
+        <div>
+          <label class="text-xs mb-0.5 block">🤖 Algorithm:</label>
+          <select id="algoSel" class="w-full text-xs border border-[var(--border)] rounded-lg px-2 py-1.5">
+            <option value="modqn">Proposed Dueling MO-DQN</option>
+            <option value="greedy">Greedy Heuristic (Baseline)</option>
+            <option value="random">Random Walk (Baseline)</option>
+            <option value="sodqn">Single-Objective DQN</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- GENERATE BUTTON -->
+    <button id="genBtn" onclick="generateRoute()"
+      class="w-full py-2.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-sm"
+      style="background:var(--primary);color:var(--primary-foreground)">
+      <span id="btnIco">🚀</span><span id="btnTxt">Generate Optimal Route</span>
+    </button>
+    <button onclick="compareAll()" class="w-full py-1.5 rounded-xl text-xs font-semibold border border-[var(--border)] hover:border-[var(--primary)] transition-colors">
+      📊 Benchmark All Algorithms
+    </button>
+
+  </aside>
+
+  <!-- MAIN DASHBOARD CONTENT -->
+  <main class="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
+
+    <!-- TABS -->
+    <div class="flex border-b border-[var(--border)] justify-between items-center">
+      <div class="flex">
+        <button class="tab-btn active text-sm px-4 py-2 font-medium" onclick="switchTab('map')"       data-tab="map">🗺 Interactive Route Map</button>
+        <button class="tab-btn       text-sm px-4 py-2 font-medium" onclick="switchTab('itinerary')"  data-tab="itinerary">✏️ Live Itinerary Editor</button>
+        <button class="tab-btn       text-sm px-4 py-2 font-medium" onclick="switchTab('metrics')"    data-tab="metrics">📈 Metrics</button>
+        <button class="tab-btn       text-sm px-4 py-2 font-medium" onclick="switchTab('pareto')"     data-tab="pareto">🎯 Pareto Front</button>
+      </div>
+      <div class="text-xs text-[var(--muted-foreground)] flex items-center gap-2 pr-2">
+        <span id="routeSummaryBadge" class="badge" style="background:color-mix(in srgb,var(--primary) 10%,transparent);color:var(--primary)">Click Generate Route to Start</span>
+      </div>
+    </div>
+
+    <!-- TAB 1: INTERACTIVE MAP (FIXED PROJECTION & ZOOM/PAN) -->
+    <div id="tab-map" class="tab-pane flex flex-col gap-3">
+      <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl overflow-hidden shadow-sm">
+        
+        <!-- Map Header bar -->
+        <div class="px-4 py-2 border-b border-[var(--border)] flex items-center justify-between flex-wrap gap-2 text-xs">
+          <div class="flex items-center gap-2">
+            <span id="mapTitle" class="font-semibold text-sm">Trivandrum &amp; South Kerala</span>
+            <span id="zoomLevelText" class="text-[var(--muted-foreground)] text-xs font-mono">Zoom: 100%</span>
+          </div>
+
+          <!-- POI Category Legend -->
+          <div class="flex gap-2.5 text-xs text-[var(--muted-foreground)] flex-wrap items-center">
+            <span class="flex items-center gap-1"><span class="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500"></span> Start</span>
+            <span class="flex items-center gap-1"><span class="inline-block w-2.5 h-2.5 rounded-full bg-rose-500"></span> End</span>
+            <span class="flex items-center gap-1"><span class="inline-block w-2.5 h-2.5 rounded-full bg-rose-400"></span> Museum</span>
+            <span class="flex items-center gap-1"><span class="inline-block w-2.5 h-2.5 rounded-full bg-green-400"></span> Nature</span>
+            <span class="flex items-center gap-1"><span class="inline-block w-2.5 h-2.5 rounded-full bg-amber-400"></span> Culture</span>
+            <span class="flex items-center gap-1"><span class="inline-block w-2.5 h-2.5 rounded-full bg-purple-400"></span> Landmark</span>
+            <span class="flex items-center gap-1"><span class="inline-block w-2.5 h-2.5 rounded-full bg-sky-400"></span> Beach</span>
+          </div>
+        </div>
+
+        <!-- Canvas Container with Zoom/Pan controls -->
+        <div id="mapContainer" style="height:460px;width:100%;">
+          <canvas id="mapCanvas" style="width:100%;height:100%;display:block"></canvas>
+          
+          <!-- Zoom & Pan Floating Controls -->
+          <div class="absolute top-3 right-3 flex flex-col gap-1.5 z-10">
+            <button class="map-tool-btn" onclick="zoomMap(1.25)" title="Zoom In (+)">➕</button>
+            <button class="map-tool-btn" onclick="zoomMap(0.8)"  title="Zoom Out (-)">➖</button>
+            <button class="map-tool-btn" onclick="resetMapView()" title="Fit / Reset Route View">🎯</button>
+          </div>
+
+          <!-- Map Navigation Hint -->
+          <div class="absolute bottom-2 left-3 text-[10px] text-[var(--muted-foreground)] bg-[var(--card)] px-2 py-0.5 rounded border border-[var(--border)] opacity-80 pointer-events-none">
+            💡 Scroll to Zoom · Click &amp; Drag to Pan · Hover marker for details
+          </div>
+
+          <!-- Tooltip Popup -->
+          <div id="tooltip"></div>
+        </div>
+      </div>
+
+      <!-- Live Trip KPI Cards -->
+      <div class="grid grid-cols-4 gap-3">
+        <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-3 text-center">
+          <div class="text-xl font-bold" id="st-pois">0</div>
+          <div class="text-xs text-[var(--muted-foreground)] mt-0.5">POIs Visited</div>
+        </div>
+        <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-3 text-center">
+          <div class="text-xl font-bold" id="st-time">0.0h</div>
+          <div class="text-xs text-[var(--muted-foreground)] mt-0.5">Trip Time</div>
+        </div>
+        <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-3 text-center">
+          <div class="text-xl font-bold" id="st-cost">₹0</div>
+          <div class="text-xs text-[var(--muted-foreground)] mt-0.5">Total Cost</div>
+        </div>
+        <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-3 text-center">
+          <div class="text-xl font-bold" id="st-reward">0.00</div>
+          <div class="text-xs text-[var(--muted-foreground)] mt-0.5">Pareto MO Reward</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 2: LIVE ITINERARY EDITOR -->
+    <div id="tab-itinerary" class="tab-pane hidden">
+      <!-- Dynamic Constraint Adjuster Header -->
+      <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-3 mb-2">
+        <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
+          <div class="font-semibold text-xs flex items-center gap-2">
+            <span>✏️ Mid-Trip Constraints &amp; Re-Planning</span>
+            <span id="editAlgoLbl" class="badge" style="background:color-mix(in srgb,var(--primary) 15%,transparent);color:var(--primary)">Dueling MO-DQN</span>
+          </div>
+          <div class="flex gap-2">
+            <button onclick="replanAll()" class="action-btn success text-xs">🔄 Re-plan Full Route</button>
+            <button onclick="clearRoute()" class="action-btn danger text-xs">🗑 Clear Route</button>
+          </div>
+        </div>
+
+        <!-- Trip Budget Bars -->
+        <div class="grid grid-cols-2 gap-3 mb-2">
+          <div>
+            <div class="flex justify-between text-xs mb-1">
+              <span>⏱ Time Consumption:</span>
+              <span id="progTimeText" class="font-mono font-semibold">0.0 / 10.0 hrs</span>
+            </div>
+            <div class="w-full bg-[var(--border)] rounded-full h-2 overflow-hidden">
+              <div id="progTimeBar" class="bar h-2 rounded-full" style="width:0%;background:var(--primary)"></div>
+            </div>
+          </div>
+          <div>
+            <div class="flex justify-between text-xs mb-1">
+              <span>💰 Budget Consumption:</span>
+              <span id="progBudgText" class="font-mono font-semibold">₹0 / ₹2000</span>
+            </div>
+            <div class="w-full bg-[var(--border)] rounded-full h-2 overflow-hidden">
+              <div id="progBudgBar" class="bar h-2 rounded-full" style="width:0%;background:#22c55e"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Quick Dynamic Adjustments -->
+        <div class="flex gap-2 items-center text-xs flex-wrap pt-1 border-t border-[var(--border)]">
+          <span class="text-[var(--muted-foreground)]">Change Constraints on the fly:</span>
+          <button onclick="adjustTime(0.5)"   class="action-btn">+0.5h ⏱</button>
+          <button onclick="adjustTime(-0.5)"  class="action-btn">-0.5h ⏱</button>
+          <button onclick="adjustBudget(200)" class="action-btn">+₹200 💰</button>
+          <button onclick="adjustBudget(-200)" class="action-btn">-₹200 💰</button>
+          <button onclick="adjustBudget(500)" class="action-btn">+₹500 💰</button>
+        </div>
+      </div>
+
+      <!-- Split Layout: Route Steps + Unvisited Drawer -->
+      <div class="flex gap-3">
+        <!-- Steps Timeline -->
+        <div class="flex-1">
+          <div id="editSteps" class="flex flex-col gap-0">
+            <p class="text-xs text-[var(--muted-foreground)] italic p-3">Generate a route first to view and edit steps.</p>
+          </div>
+        </div>
+
+        <!-- Right Quick-Add Panel -->
+        <div class="w-64 shrink-0">
+          <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl overflow-hidden sticky top-0">
+            <div class="px-3 py-2 border-b border-[var(--border)]">
+              <div class="text-xs font-semibold mb-1">📍 Candidate Attractions</div>
+              <input id="sideSearch" type="text" placeholder="Filter..." oninput="renderSidePanel()"
+                class="w-full text-xs bg-[var(--background)] border border-[var(--border)] rounded px-2 py-1 outline-none">
+            </div>
+            <div id="sidePanel" class="overflow-y-auto p-2 flex flex-col gap-1" style="max-height:480px">
+              <p class="text-xs text-[var(--muted-foreground)] italic p-1">Generate route first.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 3: METRICS -->
+    <div id="tab-metrics" class="tab-pane hidden">
+      <div class="grid grid-cols-2 gap-4">
+        <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4">
+          <h3 class="text-sm font-semibold mb-3">🎛️ Objective Breakdown</h3>
+          <div id="objBreak"><p class="text-xs text-[var(--muted-foreground)] italic">Generate a route first.</p></div>
+        </div>
+        <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4">
+          <h3 class="text-sm font-semibold mb-3">📊 Algorithm Comparison</h3>
+          <div id="algoCmp"><p class="text-xs text-[var(--muted-foreground)] italic">Click "Benchmark All Algorithms".</p></div>
+        </div>
+        <div class="col-span-2 bg-[var(--card)] border border-[var(--border)] rounded-xl p-4">
+          <h3 class="text-sm font-semibold mb-2">📈 Training Convergence (MO-DQN vs SO-DQN)</h3>
+          <canvas id="convChart" height="180"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 4: PARETO FRONT -->
+    <div id="tab-pareto" class="tab-pane hidden">
+      <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4">
+        <h3 class="text-sm font-semibold">🎯 2D Pareto Front — Satisfaction vs Cost</h3>
+        <p class="text-xs text-[var(--muted-foreground)] mb-3">Simulates 35 diverse preference weight vectors across the simplex. Dueling MO-DQN spans the Pareto frontier.</p>
+        <canvas id="paretoChart" height="300"></canvas>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- TOAST MESSAGE -->
+<div id="toast" class="toast hidden"></div>
+
+<script>
+/* ================================================================
+   KERALA POI DATABASE (Accurate coordinates & travel realistic values)
+   ================================================================ */
+const ALL_POIS = [
+  // ── TRIVANDRUM & SOUTH KERALA ──
+  {id:0,  name:"Trivandrum Central (Hotel/Station)", cat:"Origin",   lat:8.4872, lon:76.9501, rating:0,   dwell:0,   fee:0,   open:0, close:24, region:"trivandrum"},
+  {id:1,  name:"Trivandrum Int'l Airport (TRV)",    cat:"Origin",   lat:8.4821, lon:76.9200, rating:0,   dwell:0,   fee:0,   open:0, close:24, region:"trivandrum"},
+  {id:2,  name:"Padmanabhaswamy Temple",            cat:"Culture",  lat:8.4830, lon:76.9436, rating:4.8, dwell:1.0, fee:0,   open:4, close:21, region:"trivandrum"},
+  {id:3,  name:"Napier Museum & Art Gallery",       cat:"Museum",   lat:8.5089, lon:76.9555, rating:4.5, dwell:1.2, fee:40,  open:10,close:17, region:"trivandrum"},
+  {id:4,  name:"Kanakakkunnu Palace Grounds",       cat:"Culture",  lat:8.5132, lon:76.9582, rating:4.4, dwell:0.8, fee:0,   open:6, close:21, region:"trivandrum"},
+  {id:5,  name:"Attukal Bhagavathy Temple",         cat:"Culture",  lat:8.4715, lon:76.9525, rating:4.6, dwell:0.8, fee:0,   open:5, close:21, region:"trivandrum"},
+  {id:6,  name:"Kovalam Lighthouse Beach",          cat:"Beach",    lat:8.3988, lon:76.9820, rating:4.7, dwell:1.5, fee:0,   open:6, close:22, region:"trivandrum"},
+  {id:7,  name:"Shanghumukham Beach Sunset",        cat:"Beach",    lat:8.4795, lon:76.9118, rating:4.3, dwell:1.0, fee:0,   open:6, close:22, region:"trivandrum"},
+  {id:8,  name:"Poovar Island Mangrove Cruise",     cat:"Beach",    lat:8.3182, lon:77.0620, rating:4.6, dwell:1.8, fee:350, open:7, close:18, region:"trivandrum"},
+  {id:9,  name:"Varkala Cliff & Papanasam Beach",   cat:"Beach",    lat:8.7360, lon:76.7050, rating:4.8, dwell:2.0, fee:0,   open:6, close:22, region:"trivandrum"},
+  {id:10, name:"Neyyar Dam & Lion Safari Park",     cat:"Nature",   lat:8.5370, lon:77.1510, rating:4.3, dwell:2.0, fee:120, open:9, close:16, region:"trivandrum"},
+  {id:11, name:"Ponmudi Hill Station Viewpoint",    cat:"Nature",   lat:8.7600, lon:77.1160, rating:4.5, dwell:1.5, fee:50,  open:8, close:17, region:"trivandrum"},
+
+  // ── KOCHI REGION ──
+  {id:12, name:"Kochi City Hotel (Ernakulam)",      cat:"Origin",   lat:9.9680, lon:76.2890, rating:0,   dwell:0,   fee:0,   open:0, close:24, region:"kochi"},
+  {id:13, name:"Cochin Int'l Airport (COK)",        cat:"Origin",   lat:10.155, lon:76.3910, rating:0,   dwell:0,   fee:0,   open:0, close:24, region:"kochi"},
+  {id:14, name:"Fort Kochi Beach & Promenade",      cat:"Landmark", lat:9.9658, lon:76.2421, rating:4.7, dwell:1.0, fee:0,   open:6, close:22, region:"kochi"},
+  {id:15, name:"Chinese Fishing Nets",              cat:"Landmark", lat:9.9681, lon:76.2397, rating:4.6, dwell:0.5, fee:0,   open:6, close:21, region:"kochi"},
+  {id:16, name:"Mattancherry Dutch Palace",         cat:"Museum",   lat:9.9572, lon:76.2591, rating:4.5, dwell:1.0, fee:20,  open:9, close:17, region:"kochi"},
+  {id:17, name:"Jew Town & Paradesi Synagogue",     cat:"Culture",  lat:9.9563, lon:76.2596, rating:4.4, dwell:0.8, fee:10,  open:10,close:17, region:"kochi"},
+  {id:18, name:"St. Francis Church (Vasco Da Gama)",cat:"Culture",  lat:9.9660, lon:76.2427, rating:4.5, dwell:0.5, fee:0,   open:8, close:18, region:"kochi"},
+  {id:19, name:"Kerala Folklore Museum",            cat:"Museum",   lat:9.9320, lon:76.3110, rating:4.7, dwell:1.2, fee:100, open:9, close:18, region:"kochi"},
+  {id:20, name:"Marine Drive Walkway & Boating",    cat:"Nature",   lat:9.9790, lon:76.2750, rating:4.3, dwell:0.8, fee:0,   open:6, close:22, region:"kochi"},
+  {id:21, name:"Hill Palace Museum Tripunithura",   cat:"Museum",   lat:9.9520, lon:76.3570, rating:4.4, dwell:1.2, fee:30,  open:9, close:17, region:"kochi"},
+  {id:22, name:"Cherai Beach & Backwaters",         cat:"Beach",    lat:10.141, lon:76.1790, rating:4.6, dwell:1.5, fee:0,   open:6, close:21, region:"kochi"},
+
+  // ── MUNNAR HILL STATION ──
+  {id:23, name:"Munnar Town Center (Start)",        cat:"Origin",   lat:10.089, lon:77.0600, rating:0,   dwell:0,   fee:0,   open:0, close:24, region:"munnar"},
+  {id:24, name:"KDHP Tea Museum & Factory",         cat:"Museum",   lat:10.091, lon:77.0650, rating:4.6, dwell:1.0, fee:80,  open:9, close:17, region:"munnar"},
+  {id:25, name:"Eravikulam National Park (Nilgiri)",cat:"Nature",   lat:10.150, lon:77.0580, rating:4.8, dwell:2.0, fee:150, open:8, close:16, region:"munnar"},
+  {id:26, name:"Mattupetty Dam & Speedboating",     cat:"Nature",   lat:10.103, lon:77.1250, rating:4.5, dwell:1.0, fee:30,  open:8, close:17, region:"munnar"},
+  {id:27, name:"Echo Point Shola Forest",           cat:"Nature",   lat:10.117, lon:77.1550, rating:4.4, dwell:0.7, fee:20,  open:8, close:18, region:"munnar"},
+  {id:28, name:"Kundala Arch Dam & Pedal Boats",    cat:"Nature",   lat:10.125, lon:77.1850, rating:4.5, dwell:0.8, fee:25,  open:8, close:17, region:"munnar"},
+  {id:29, name:"Top Station Panoramic Peak",        cat:"Nature",   lat:10.120, lon:77.2450, rating:4.7, dwell:1.2, fee:25,  open:7, close:18, region:"munnar"},
+  {id:30, name:"Pothamedu Tea Valley Viewpoint",    cat:"Nature",   lat:10.065, lon:77.0500, rating:4.4, dwell:0.6, fee:0,   open:6, close:19, region:"munnar"},
+  {id:31, name:"Lakkam Waterfalls",                 cat:"Nature",   lat:10.210, lon:77.1000, rating:4.3, dwell:0.8, fee:30,  open:8, close:17, region:"munnar"},
+
+  // ── ALLEPPEY BACKWATERS ──
+  {id:32, name:"Alleppey Finishing Point (Start)",  cat:"Origin",   lat:9.5010, lon:76.3450, rating:0,   dwell:0,   fee:0,   open:0, close:24, region:"backwaters"},
+  {id:33, name:"Alleppey Shikara/Houseboat Tour",   cat:"Culture",  lat:9.4930, lon:76.3400, rating:4.9, dwell:2.2, fee:600, open:7, close:18, region:"backwaters"},
+  {id:34, name:"Punnamada Lake Kayaking",           cat:"Nature",   lat:9.5150, lon:76.3550, rating:4.7, dwell:1.2, fee:150, open:6, close:19, region:"backwaters"},
+  {id:35, name:"Marari Tranquil Beach",             cat:"Beach",    lat:9.6010, lon:76.2950, rating:4.6, dwell:1.5, fee:0,   open:6, close:21, region:"backwaters"},
+  {id:36, name:"Kumarakom Bird Sanctuary",          cat:"Nature",   lat:9.6250, lon:76.4300, rating:4.5, dwell:1.5, fee:50,  open:7, close:17, region:"backwaters"},
+  {id:37, name:"Kuttanad Below-Sea-Level Paddy",    cat:"Culture",  lat:9.4200, lon:76.4400, rating:4.4, dwell:1.0, fee:0,   open:7, close:19, region:"backwaters"},
+  {id:38, name:"Ambalapuzha Sree Krishna Temple",   cat:"Culture",  lat:9.3850, lon:76.3580, rating:4.6, dwell:0.8, fee:0,   open:4, close:21, region:"backwaters"},
+
+  // ── WAYANAD ──
+  {id:39, name:"Kalpetta Hub (Start)",              cat:"Origin",   lat:11.608, lon:76.0830, rating:0,   dwell:0,   fee:0,   open:0, close:24, region:"wayanad"},
+  {id:40, name:"Edakkal Prehistoric Caves",         cat:"Landmark", lat:11.625, lon:76.2350, rating:4.7, dwell:1.8, fee:40,  open:8, close:16, region:"wayanad"},
+  {id:41, name:"Banasura Sagar Earthen Dam",        cat:"Nature",   lat:11.670, lon:75.9550, rating:4.6, dwell:1.2, fee:30,  open:8, close:17, region:"wayanad"},
+  {id:42, name:"Pookode Freshwater Lake",           cat:"Nature",   lat:11.542, lon:76.0280, rating:4.4, dwell:1.0, fee:30,  open:9, close:18, region:"wayanad"},
+  {id:43, name:"Soochipara 3-Tier Waterfalls",      cat:"Nature",   lat:11.512, lon:76.1620, rating:4.7, dwell:1.5, fee:40,  open:8, close:17, region:"wayanad"},
+  {id:44, name:"Thirunelli Temple (Sahyadri)",      cat:"Culture",  lat:11.905, lon:75.9980, rating:4.6, dwell:1.0, fee:0,   open:5, close:20, region:"wayanad"},
+  {id:45, name:"Muthanga Wildlife Sanctuary",       cat:"Nature",   lat:11.680, lon:76.3700, rating:4.4, dwell:2.0, fee:220, open:6, close:16, region:"wayanad"},
+
+  // ── THRISSUR & ATHIRAPALLY ──
+  {id:46, name:"Thrissur Cultural Hub (Start)",     cat:"Origin",   lat:10.528, lon:76.2140, rating:0,   dwell:0,   fee:0,   open:0, close:24, region:"thrissur"},
+  {id:47, name:"Athirapally Majestic Waterfalls",   cat:"Nature",   lat:10.285, lon:76.5690, rating:4.9, dwell:1.8, fee:40,  open:8, close:17, region:"thrissur"},
+  {id:48, name:"Vazhachal Forest Waterfalls",       cat:"Nature",   lat:10.264, lon:76.5820, rating:4.6, dwell:1.0, fee:20,  open:8, close:17, region:"thrissur"},
+  {id:49, name:"Guruvayur Sree Krishna Temple",     cat:"Culture",  lat:10.594, lon:76.0420, rating:4.8, dwell:1.2, fee:0,   open:3, close:21, region:"thrissur"},
+  {id:50, name:"Vadakkumnathan Shiva Temple",       cat:"Culture",  lat:10.529, lon:76.2130, rating:4.7, dwell:0.9, fee:0,   open:4, close:21, region:"thrissur"},
+  {id:51, name:"Kerala Kalamandalam Performing Arts",cat:"Culture", lat:10.748, lon:76.2750, rating:4.5, dwell:1.2, fee:50,  open:9, close:17, region:"thrissur"},
+  {id:52, name:"Peechi Dam & Forest Reserve",       cat:"Nature",   lat:10.533, lon:76.3670, rating:4.3, dwell:1.2, fee:30,  open:8, close:18, region:"thrissur"},
+];
+
+const REGION_BOUNDS = {
+  trivandrum: { label: "Trivandrum & South Kerala", defaultStart: 0 },
+  kochi:      { label: "Kochi & Surroundings",      defaultStart: 12 },
+  munnar:     { label: "Munnar Hill Station",       defaultStart: 23 },
+  backwaters: { label: "Alleppey Backwaters",       defaultStart: 32 },
+  wayanad:    { label: "Wayanad Highlands",         defaultStart: 39 },
+  thrissur:   { label: "Thrissur & Athirapally",    defaultStart: 46 },
+};
+
+const CAT_COL = {
+  Origin:   "#10b981", // green for start/hub
+  Museum:   "#f87171", // soft red
+  Nature:   "#34d399", // soft green
+  Culture:  "#fbbf24", // amber
+  Landmark: "#c084fc", // purple
+  Beach:    "#38bdf8", // cyan
+  Default:  "#94a3b8"
+};
+
+const SPEED = 38;      // km/h (realistic Kerala traffic avg)
+const BASE_FARE = 50;  // ₹ base booking fare
+const PER_KM = 12;     // ₹ auto/taxi per km
+
+/* Active State */
+let activeRegion = "trivandrum";
+let rPOIs = [];        // Filtered POIs for current region
+let N = 0;
+let timeMat = [], costMat = [];
+
+let startPOIIndex = 0;  // Local index within rPOIs
+let endMode = "roundtrip"; // "roundtrip" | "specific" | "open"
+let endPOIIndex = 0;    // Local index within rPOIs
+
+let editRoute = [];     // Array of local POI indices
+let tripTMax = 10.0, tripBMax = 2000;
+let W = [0.50, 0.25, 0.25];
+
+/* ── Haversine calculation ── */
+function haversine(a, b) {
+  const R = 6371;
+  const dLat = (b.lat - a.lat) * Math.PI / 180;
+  const dLon = (b.lon - a.lon) * Math.PI / 180;
+  const s = Math.sin(dLat/2)**2 + Math.cos(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) * Math.sin(dLon/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+
+function buildMatrices() {
+  N = rPOIs.length;
+  timeMat = []; costMat = [];
+  for (let i = 0; i < N; i++) {
+    timeMat.push(new Array(N).fill(0));
+    costMat.push(new Array(N).fill(0));
+  }
+  for (let i = 0; i < N; i++) {
+    for (let j = 0; j < N; j++) {
+      if (i === j) continue;
+      const d = haversine(rPOIs[i], rPOIs[j]);
+      timeMat[i][j] = d / SPEED + rPOIs[j].dwell;
+      costMat[i][j] = BASE_FARE + (PER_KM * d) + rPOIs[j].fee;
+    }
+  }
+}
+
+/* ── REGION CHANGE & DROPDOWNS ── */
+function onRegionChange() {
+  activeRegion = document.getElementById("regionSelect").value;
+  rPOIs = ALL_POIS.filter(p => p.region === activeRegion);
+  buildMatrices();
+  document.getElementById("mapTitle").textContent = REGION_BOUNDS[activeRegion].label;
+
+  // Populate Start dropdown
+  const startSel = document.getElementById("startSelect");
+  startSel.innerHTML = "";
+  rPOIs.forEach((p, idx) => {
+    const opt = document.createElement("option");
+    opt.value = idx;
+    opt.textContent = `${p.cat === 'Origin' ? '🏨 ' : '📍 '}${p.name}`;
+    startSel.appendChild(opt);
+  });
+  startPOIIndex = 0;
+  startSel.value = 0;
+
+  // Populate End dropdown
+  populateEndSelect();
+
+  editRoute = [];
+  resetMapView();
+  drawMap(null);
+  renderEditSteps();
+  renderSidePanel();
+}
+
+function onStartChange() {
+  startPOIIndex = parseInt(document.getElementById("startSelect").value);
+  populateEndSelect();
+  if (editRoute.length > 0) {
+    showToast("📍 Start point updated. Click 'Generate Route' to re-route.", "#6366f1");
+  }
+}
+
+function onEndModeChange() {
+  endMode = document.getElementById("endModeSelect").value;
+  const box = document.getElementById("specificEndBox");
+  if (endMode === "specific") {
+    box.classList.remove("hidden");
+    populateEndSelect();
+  } else {
+    box.classList.add("hidden");
+  }
+}
+
+function populateEndSelect() {
+  const endSel = document.getElementById("endSelect");
+  endSel.innerHTML = "";
+  rPOIs.forEach((p, idx) => {
+    if (idx !== startPOIIndex) {
+      const opt = document.createElement("option");
+      opt.value = idx;
+      opt.textContent = `${p.cat === 'Origin' ? '🏨 ' : '🏁 '}${p.name}`;
+      endSel.appendChild(opt);
+    }
+  });
+  endPOIIndex = endSel.options.length > 0 ? parseInt(endSel.options[0].value) : 0;
+}
+
+/* ── PREFERENCE WEIGHTS ── */
+function Wn() {
+  const s = W[0] + W[1] + W[2] || 1;
+  return W.map(v => v / s);
+}
+function normalizeW() {
+  W = [parseFloat(document.getElementById('w1').value),
+       parseFloat(document.getElementById('w2').value),
+       parseFloat(document.getElementById('w3').value)];
+  const s = W[0] + W[1] + W[2] || 1;
+  W = W.map(v => v / s);
+  ['w1', 'w2', 'w3'].forEach((id, i) => {
+    document.getElementById(id).value = W[i].toFixed(2);
+    document.getElementById(id + 'val').textContent = W[i].toFixed(2);
+  });
+  drawTriangle();
+}
+function applyProfile(p) {
+  const presets = {
+    luxury:   [0.80, 0.10, 0.10],
+    budget:   [0.20, 0.10, 0.70],
+    express:  [0.30, 0.60, 0.10],
+    balanced: [0.333, 0.333, 0.334]
+  };
+  W = presets[p];
+  ['w1', 'w2', 'w3'].forEach((id, i) => {
+    document.getElementById(id).value = W[i].toFixed(2);
+    document.getElementById(id + 'val').textContent = W[i].toFixed(2);
+  });
+  drawTriangle();
+  showToast(`Profile applied: ${p.toUpperCase()}`, "#6366f1");
+}
+
+/* ================================================================
+   MORL DUELING DQN ALGORITHM (with START & END CONSTRAINTS)
+   ================================================================ */
+function runMODQNWithConstraints(w, tMax, bMax, sLoc, eMode, eLoc, stTRem, stBRem, stClock, excludeVisited) {
+  let loc = sLoc;
+  let tRem = stTRem;
+  let bRem = stBRem;
+  let clock = stClock;
+  const vis = new Set(excludeVisited);
+  const route = [loc];
+
+  let totRat = 0;
+  const effectiveEnd = (eMode === "roundtrip") ? sLoc : (eMode === "specific" ? eLoc : -1);
+
+  for (let s = 0; s < 45; s++) {
+    const candidates = [];
+    for (let j = 0; j < N; j++) {
+      if (vis.has(j) || j === loc) continue;
+      if (j === effectiveEnd) continue; // Final end reached at conclusion
+
+      const tStep = timeMat[loc][j];
+      const cStep = costMat[loc][j];
+      const finishTime = clock + tStep;
+
+      // Check operating hours
+      if (finishTime > rPOIs[j].close) continue;
+
+      // Check if candidate j + returning to effectiveEnd fits remaining budget/time!
+      let tNeededToEnd = 0, cNeededToEnd = 0;
+      if (effectiveEnd >= 0) {
+        tNeededToEnd = (haversine(rPOIs[j], rPOIs[effectiveEnd]) / SPEED);
+        cNeededToEnd = BASE_FARE + (PER_KM * haversine(rPOIs[j], rPOIs[effectiveEnd]));
+      }
+
+      if ((tStep + tNeededToEnd <= tRem) && (cStep + cNeededToEnd <= bRem)) {
+        candidates.push(j);
+      }
+    }
+
+    if (candidates.length === 0) break;
+
+    // Dueling Q-Value scoring: V(s, w) + A(s, a, w)
+    const Vs = (tRem / tMax + bRem / bMax) * 0.25;
+    let bestQ = -Infinity, bestJ = -1;
+
+    for (const j of candidates) {
+      const u = rPOIs[j].rating / 5.0;
+      const tNorm = timeMat[loc][j] / tMax;
+      const cNorm = costMat[loc][j] / bMax;
+
+      const A = (w[0] * u * 2.5) - (w[1] * tNorm * 2.0) - (w[2] * cNorm * 2.0) + 0.15;
+
+      // Lookahead reachability bonus
+      let futureOptions = 0;
+      for (let k = 0; k < N; k++) {
+        if (!vis.has(k) && k !== j && k !== effectiveEnd) {
+          if (timeMat[j][k] <= (tRem - timeMat[loc][j])) futureOptions += 0.04;
+        }
+      }
+
+      const Q = Vs + A + Math.min(futureOptions, 0.4);
+      if (Q > bestQ) {
+        bestQ = Q;
+        bestJ = j;
+      }
+    }
+
+    if (bestJ < 0) break;
+
+    const tc = timeMat[loc][bestJ];
+    const cc = costMat[loc][bestJ];
+    tRem -= tc;
+    bRem -= cc;
+    clock += tc;
+    vis.add(bestJ);
+    route.push(bestJ);
+    totRat += rPOIs[bestJ].rating;
+    loc = bestJ;
+  }
+
+  // Append designated END destination if requested
+  if (effectiveEnd >= 0 && effectiveEnd !== route[route.length - 1]) {
+    const finalDist = haversine(rPOIs[loc], rPOIs[effectiveEnd]);
+    const finalTime = finalDist / SPEED;
+    const finalCost = BASE_FARE + (PER_KM * finalDist);
+    tRem -= finalTime;
+    bRem -= finalCost;
+    clock += finalTime;
+    route.push(effectiveEnd);
+  }
+
+  return { route, tUsed: tMax - tRem, bUsed: bMax - bRem, totRat };
+}
+
+function fullAgentRun(algo, w, tMax, bMax) {
+  startPOIIndex = parseInt(document.getElementById("startSelect").value) || 0;
+  endMode = document.getElementById("endModeSelect").value;
+  endPOIIndex = (endMode === "specific") ? parseInt(document.getElementById("endSelect").value) || 0 : -1;
+
+  const vis = new Set([startPOIIndex]);
+
+  if (algo === 'modqn') {
+    return runMODQNWithConstraints(w, tMax, bMax, startPOIIndex, endMode, endPOIIndex, tMax, bMax, 9.0, vis);
+  }
+  if (algo === 'greedy') {
+    // Greedy picking closest highest-rated POI
+    return runMODQNWithConstraints([0.8, 0.2, 0.0], tMax, bMax, startPOIIndex, endMode, endPOIIndex, tMax, bMax, 9.0, vis);
+  }
+  if (algo === 'random') {
+    // Random weights exploration
+    return runMODQNWithConstraints([0.33, 0.33, 0.34], tMax, bMax, startPOIIndex, endMode, endPOIIndex, tMax, bMax, 9.0, vis);
+  }
+  // Single-Objective DQN (rating only)
+  return runMODQNWithConstraints([0.95, 0.05, 0.0], tMax, bMax, startPOIIndex, endMode, endPOIIndex, tMax, bMax, 9.0, vis);
+}
+
+/* ── GENERATE ROUTE ── */
+function generateRoute() {
+  const btn = document.getElementById('genBtn');
+  document.getElementById('btnTxt').textContent = 'Computing Policy…';
+  document.getElementById('btnIco').innerHTML = '<span class="spin">⏳</span>';
+  btn.disabled = true;
+  document.getElementById('statusBadge').textContent = 'Running';
+
+  setTimeout(() => {
+    tripTMax = parseFloat(document.getElementById('tmax').value);
+    tripBMax = parseFloat(document.getElementById('bmax').value);
+    const algo = document.getElementById('algoSel').value;
+    const w = Wn();
+
+    const res = fullAgentRun(algo, w, tripTMax, tripBMax);
+    editRoute = [...res.route];
+
+    const names = { modqn: 'Dueling MO-DQN', greedy: 'Greedy Heuristic', random: 'Random Walk', sodqn: 'SO-DQN' };
+    document.getElementById('editAlgoLbl').textContent = names[algo] || algo;
+
+    resetMapView();
+    refreshAll();
+
+    document.getElementById('btnTxt').textContent = 'Generate Optimal Route';
+    document.getElementById('btnIco').textContent = '🚀';
+    btn.disabled = false;
+    document.getElementById('statusBadge').textContent = 'Done ✓';
+
+    const endText = (endMode === "roundtrip") ? " (Round Trip)" : (endMode === "specific" ? ` (End: ${rPOIs[endPOIIndex].name})` : "");
+    showToast(`✅ Route created: ${editRoute.length} stops${endText}`, "#22c55e");
+  }, 450);
+}
+
+function routeTotals() {
+  let tUsed = 0, bUsed = 0, totRat = 0, reward = 0;
+  const w = Wn();
+  for (let i = 1; i < editRoute.length; i++) {
+    const from = editRoute[i - 1], to = editRoute[i];
+    const tc = timeMat[from][to], cc = costMat[from][to];
+    tUsed += tc;
+    bUsed += cc;
+    totRat += rPOIs[to].rating;
+    const u = rPOIs[to].rating / 5.0;
+    const tN = tc / tripTMax;
+    const cN = cc / tripBMax;
+    reward += (w[0] * u * 2.5) - (w[1] * tN * 2.0) - (w[2] * cN * 2.0) + 0.15;
+  }
+  return { tUsed, bUsed, totRat, reward };
+}
+
+function refreshAll() {
+  const tot = routeTotals();
+  updateKPIs(tot);
+  updateProgressBar(tot);
+  drawMap({ route: editRoute });
+  renderEditSteps();
+  renderSidePanel();
+  updateObjBreak(tot);
+  drawConvergence();
+
+  document.getElementById('routeSummaryBadge').textContent = 
+    `${editRoute.length} Stops · ${tot.tUsed.toFixed(1)}h · ₹${Math.round(tot.bUsed)}`;
+}
+
+function updateKPIs(tot) {
+  const validPois = editRoute.filter((idx, i) => i > 0 && rPOIs[idx].cat !== "Origin").length;
+  document.getElementById('st-pois').textContent = validPois;
+  document.getElementById('st-time').textContent = tot.tUsed.toFixed(1) + 'h';
+  document.getElementById('st-cost').textContent = '₹' + Math.round(tot.bUsed);
+  document.getElementById('st-reward').textContent = tot.reward.toFixed(2);
+}
+
+function updateProgressBar(tot) {
+  const tp = Math.min(100, (tot.tUsed / tripTMax) * 100);
+  const bp = Math.min(100, (tot.bUsed / tripBMax) * 100);
+  document.getElementById('progTimeBar').style.width = tp + '%';
+  document.getElementById('progTimeBar').style.background = tp > 95 ? '#ef4444' : 'var(--primary)';
+  document.getElementById('progBudgBar').style.width = bp + '%';
+  document.getElementById('progBudgBar').style.background = bp > 95 ? '#ef4444' : '#22c55e';
+  document.getElementById('progTimeText').textContent = `${tot.tUsed.toFixed(1)} / ${tripTMax} hrs`;
+  document.getElementById('progBudgText').textContent = `₹${Math.round(tot.bUsed)} / ₹${tripBMax}`;
+}
+
+/* ================================================================
+   INTERACTIVE MAP ENGINE (Pan, Zoom, Proportional Projection)
+   ================================================================ */
+const mc = document.getElementById('mapCanvas');
+const mctx = mc.getContext('2d');
+const container = document.getElementById('mapContainer');
+
+let mapScale = 1.0;
+let mapOffsetX = 0;
+let mapOffsetY = 0;
+let isDragging = false;
+let startDragX = 0, startDragY = 0;
+
+function resetMapView() {
+  if (rPOIs.length === 0) return;
+  const W = mc.width = container.offsetWidth || 900;
+  const H = mc.height = container.offsetHeight || 460;
+
+  // Find bounding box
+  const lats = rPOIs.map(p => p.lat);
+  const lons = rPOIs.map(p => p.lon);
+  const latMin = Math.min(...lats), latMax = Math.max(...lats);
+  const lonMin = Math.min(...lons), lonMax = Math.max(...lons);
+
+  const meanLat = (latMin + latMax) / 2;
+  const cosLat = Math.cos(meanLat * Math.PI / 180);
+
+  const dLat = (latMax - latMin) || 0.05;
+  const dLon = ((lonMax - lonMin) * cosLat) || 0.05;
+
+  const pad = 85;
+  const scaleX = (W - pad * 2) / dLon;
+  const scaleY = (H - pad * 2) / dLat;
+  mapScale = Math.min(scaleX, scaleY);
+  // Ensure comfortable spread for local clusters
+  if (mapScale < 1300 && (activeRegion === 'trivandrum' || activeRegion === 'kochi')) {
+    mapScale = 1450;
+  }
+
+  const centerLon = (lonMin + lonMax) / 2;
+  const centerLat = (latMin + latMax) / 2;
+
+  mapOffsetX = W / 2 - (centerLon * cosLat) * mapScale;
+  mapOffsetY = H / 2 + (centerLat) * mapScale;
+
+  document.getElementById('zoomLevelText').textContent = `Zoom: 100%`;
+  drawMap(editRoute.length ? { route: editRoute } : null);
+}
+
+function zoomMap(factor) {
+  const W = mc.width, H = mc.height;
+  const centerX = W / 2, centerY = H / 2;
+  mapOffsetX = centerX - (centerX - mapOffsetX) * factor;
+  mapOffsetY = centerY - (centerY - mapOffsetY) * factor;
+  mapScale *= factor;
+  document.getElementById('zoomLevelText').textContent = `Zoom: ${Math.round((mapScale / 1200) * 100)}%`;
+  drawMap(editRoute.length ? { route: editRoute } : null);
+}
+
+function geoToPixel(lat, lon) {
+  const meanLat = 9.5;
+  const cosLat = Math.cos(meanLat * Math.PI / 180);
+  const x = (lon * cosLat) * mapScale + mapOffsetX;
+  const y = H_canvas - (lat * mapScale + (mapOffsetY - H_canvas));
+  return { x, y: mapOffsetY - lat * mapScale };
+}
+
+let H_canvas = 460;
+
+function drawMap(res) {
+  const W = mc.width = container.offsetWidth || 900;
+  const H = mc.height = container.offsetHeight || 460;
+  H_canvas = H;
+
+  const isDark = !document.documentElement.classList.contains('light');
+  mctx.clearRect(0, 0, W, H);
+  mctx.fillStyle = isDark ? '#141624' : '#f8fafc';
+  mctx.fillRect(0, 0, W, H);
+
+  // Soft Grid
+  const gridGap = 50;
+  mctx.strokeStyle = isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.04)';
+  mctx.lineWidth = 1;
+  for (let x = 0; x < W; x += gridGap) { mctx.beginPath(); mctx.moveTo(x, 0); mctx.lineTo(x, H); mctx.stroke(); }
+  for (let y = 0; y < H; y += gridGap) { mctx.beginPath(); mctx.moveTo(0, y); mctx.lineTo(W, y); mctx.stroke(); }
+
+  const routeSet = res ? new Set(res.route) : new Set();
+  const tc = isDark ? 'rgba(255,255,255,0.85)' : 'rgba(15,23,42,0.9)';
+
+  // 1. Draw Route Path & Directional Arrows
+  if (res && res.route.length > 1) {
+    mctx.beginPath();
+    mctx.lineWidth = 3.5;
+    mctx.strokeStyle = 'rgba(99, 102, 241, 0.75)';
+    mctx.setLineDash([8, 4]);
+
+    const p0 = geoToPixel(rPOIs[res.route[0]].lat, rPOIs[res.route[0]].lon);
+    mctx.moveTo(p0.x, p0.y);
+    for (let i = 1; i < res.route.length; i++) {
+      const p = geoToPixel(rPOIs[res.route[i]].lat, rPOIs[res.route[i]].lon);
+      mctx.lineTo(p.x, p.y);
+    }
+    mctx.stroke();
+    mctx.setLineDash([]);
+
+    // Draw Arrow heads and distance tags
+    for (let i = 0; i < res.route.length - 1; i++) {
+      const a = geoToPixel(rPOIs[res.route[i]].lat, rPOIs[res.route[i]].lon);
+      const b = geoToPixel(rPOIs[res.route[i + 1]].lat, rPOIs[res.route[i + 1]].lon);
+      const mx = (a.x + b.x) / 2;
+      const my = (a.y + b.y) / 2;
+      const ang = Math.atan2(b.y - a.y, b.x - a.x);
+
+      // Arrow head
+      mctx.save();
+      mctx.translate(mx, my);
+      mctx.rotate(ang);
+      mctx.beginPath();
+      mctx.moveTo(-7, -5);
+      mctx.lineTo(7, 0);
+      mctx.lineTo(-7, 5);
+      mctx.fillStyle = '#6366f1';
+      mctx.fill();
+      mctx.restore();
+
+      // Transit Distance badge on leg if zoomed in
+      const legDist = haversine(rPOIs[res.route[i]], rPOIs[res.route[i + 1]]);
+      if (mapScale > 800) {
+        mctx.font = '10px sans-serif';
+        const distStr = `${legDist.toFixed(1)} km`;
+        mctx.fillStyle = isDark ? 'rgba(0,0,0,0.7)' : 'rgba(255,255,255,0.85)';
+        mctx.fillRect(mx - 18, my + 6, 36, 14);
+        mctx.fillStyle = isDark ? '#a5b4fc' : '#4338ca';
+        mctx.textAlign = 'center';
+        mctx.fillText(distStr, mx, my + 17);
+      }
+    }
+  }
+
+  // 2. Draw POI Markers & Collision-Free Labels
+  const labelsToDraw = [];
+
+  for (let i = 0; i < N; i++) {
+    const p = rPOIs[i];
+    const { x, y } = geoToPixel(p.lat, p.lon);
+
+    const inRoute = routeSet.has(i);
+    const isStart = (res && res.route[0] === i) || (!res && i === startPOIIndex);
+    const isEnd = (res && res.route.length > 1 && res.route[res.route.length - 1] === i);
+
+    let baseCol = CAT_COL[p.cat] || CAT_COL.Default;
+    if (isStart) baseCol = "#10b981"; // emerald for start
+    if (isEnd && !isStart) baseCol = "#ef4444"; // red for finish
+
+    const r = (isStart || isEnd) ? 11 : (inRoute ? 9 : 5.5);
+
+    // Glow ring for route stops
+    if (inRoute || isStart) {
+      mctx.beginPath();
+      mctx.arc(x, y, r + 6, 0, Math.PI * 2);
+      mctx.fillStyle = baseCol + '33';
+      mctx.fill();
+    }
+
+    // Outer Circle
+    mctx.beginPath();
+    mctx.arc(x, y, r, 0, Math.PI * 2);
+    mctx.fillStyle = baseCol;
+    mctx.strokeStyle = inRoute ? '#ffffff' : 'rgba(255,255,255,0.4)';
+    mctx.lineWidth = inRoute ? 2.5 : 1.2;
+    mctx.fill();
+    mctx.stroke();
+
+    // Marker Interior Badge
+    mctx.fillStyle = '#ffffff';
+    mctx.font = 'bold 10px sans-serif';
+    mctx.textAlign = 'center';
+    mctx.textBaseline = 'middle';
+
+    if (isStart) {
+      mctx.fillText('S', x, y);
+    } else if (isEnd) {
+      mctx.fillText('E', x, y);
+    } else if (inRoute) {
+      const stopNum = res.route.indexOf(i);
+      mctx.fillText(stopNum, x, y);
+    }
+
+    // Prepare label candidate (Anti-collision 4-quadrant layout)
+    if (inRoute || isStart || isEnd || mapScale > 1100) {
+      const stopIdx = inRoute ? res.route.indexOf(i) : 0;
+      const quad = stopIdx % 4;
+      let offX = 0, offY = 0;
+      if (quad === 0) { offX = 32; offY = -28; }
+      else if (quad === 1) { offX = -32; offY = -28; }
+      else if (quad === 2) { offX = 32; offY = 28; }
+      else { offX = -32; offY = 28; }
+      labelsToDraw.push({
+        name: p.name,
+        x, y, r,
+        stopIdx,
+        offX, offY,
+        isKey: isStart || isEnd,
+        tag: isStart ? "START" : (isEnd ? "FINISH" : `#${stopIdx}`)
+      });
+    }
+  }
+
+  // 3. Render Anti-Collision Badges and Labels with Leader Lines
+  const placedBoxes = [];
+  for (const lbl of labelsToDraw) {
+    const sn = lbl.name.length > 26 ? lbl.name.substring(0, 24) + '..' : lbl.name;
+    const labelText = lbl.isKey ? `[${lbl.tag}] ${sn}` : `(${lbl.stopIdx}) ${sn}`;
+    mctx.font = 'bold 11px system-ui, sans-serif';
+
+    const textWidth = mctx.measureText(labelText).width;
+    const boxW = textWidth + 16;
+    const boxH = 22;
+
+    let posX = lbl.x + lbl.offX - (lbl.offX < 0 ? boxW : 0);
+    let posY = lbl.y + lbl.offY - (lbl.offY < 0 ? boxH : 0);
+
+    // Collision avoidance with previously placed boxes
+    for (const b of placedBoxes) {
+      if (Math.abs(posX - b.x) < (boxW + b.w) / 2 && Math.abs(posY - b.y) < (boxH + b.h) / 2) {
+        posY += (posY >= b.y ? 26 : -26);
+      }
+    }
+    placedBoxes.push({ x: posX, y: posY, w: boxW, h: boxH });
+
+    // Draw Crisp Leader Line
+    mctx.strokeStyle = isDark ? 'rgba(148, 163, 184, 0.6)' : 'rgba(71, 85, 105, 0.6)';
+    mctx.lineWidth = 1.2;
+    mctx.beginPath();
+    mctx.moveTo(lbl.x, lbl.y);
+    mctx.lineTo(posX + boxW / 2, posY + boxH / 2);
+    mctx.stroke();
+
+    // Pill background
+    mctx.fillStyle = lbl.isKey
+      ? (lbl.tag === 'START' ? '#065f46' : '#991b1b')
+      : (isDark ? 'rgba(15, 23, 42, 0.95)' : 'rgba(255, 255, 255, 0.96)');
+    mctx.strokeStyle = lbl.isKey
+      ? (lbl.tag === 'START' ? '#34d399' : '#f87171')
+      : (isDark ? '#818cf8' : '#6366f1');
+    mctx.lineWidth = 1.5;
+
+    mctx.beginPath();
+    mctx.roundRect(posX, posY, boxW, boxH, 6);
+    mctx.fill();
+    mctx.stroke();
+
+    // Pill Text
+    mctx.fillStyle = lbl.isKey ? '#ffffff' : (isDark ? '#f8fafc' : '#0f172a');
+    mctx.textAlign = 'center';
+    mctx.textBaseline = 'middle';
+    mctx.fillText(labelText, posX + boxW / 2, posY + boxH / 2 + 0.5);
+  }
+}
+
+/* ── MOUSE PANNING & ZOOMING LISTENERS ── */
+mc.addEventListener('mousedown', e => {
+  isDragging = true;
+  startDragX = e.clientX - mapOffsetX;
+  startDragY = e.clientY - mapOffsetY;
+});
+
+window.addEventListener('mouseup', () => { isDragging = false; });
+
+mc.addEventListener('mousemove', e => {
+  if (isDragging) {
+    mapOffsetX = e.clientX - startDragX;
+    mapOffsetY = e.clientY - startDragY;
+    drawMap(editRoute.length ? { route: editRoute } : null);
+    return;
+  }
+
+  // Tooltip on Hover
+  const rect = mc.getBoundingClientRect();
+  const mouseX = e.clientX - rect.left;
+  const mouseY = e.clientY - rect.top;
+
+  let hoveredPOI = null;
+  for (let i = 0; i < N; i++) {
+    const pt = geoToPixel(rPOIs[i].lat, rPOIs[i].lon);
+    const dist = Math.hypot(mouseX - pt.x, mouseY - pt.y);
+    if (dist < 14) {
+      hoveredPOI = rPOIs[i];
+      break;
+    }
+  }
+
+  const tt = document.getElementById('tooltip');
+  if (hoveredPOI) {
+    tt.style.display = 'block';
+    tt.style.left = (mouseX + 15) + 'px';
+    tt.style.top = (mouseY + 15) + 'px';
+    tt.innerHTML = `
+      <div class="font-bold text-xs">${hoveredPOI.name}</div>
+      <div class="text-[var(--muted-foreground)] text-[10px]">${hoveredPOI.cat} · ${hoveredPOI.dwell}h dwell</div>
+      <div class="mt-1 flex gap-2 font-semibold">
+        <span class="text-amber-500">★ ${hoveredPOI.rating}</span>
+        <span class="${hoveredPOI.fee === 0 ? 'text-green-500' : 'text-indigo-400'}">${hoveredPOI.fee === 0 ? 'Free Entry' : '₹' + hoveredPOI.fee}</span>
+        <span class="text-[var(--muted-foreground)]">${hoveredPOI.open}:00-${hoveredPOI.close}:00</span>
+      </div>
+    `;
+  } else {
+    tt.style.display = 'none';
+  }
+});
+
+mc.addEventListener('wheel', e => {
+  e.preventDefault();
+  const zoomFactor = e.deltaY < 0 ? 1.15 : 0.87;
+  const rect = mc.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+
+  mapOffsetX = mx - (mx - mapOffsetX) * zoomFactor;
+  mapOffsetY = my - (my - mapOffsetY) * zoomFactor;
+  mapScale *= zoomFactor;
+
+  document.getElementById('zoomLevelText').textContent = `Zoom: ${Math.round((mapScale / 1200) * 100)}%`;
+  drawMap(editRoute.length ? { route: editRoute } : null);
+});
+
+/* ================================================================
+   MID-TRIP INTERACTIVE ROUTE RE-PLANNING
+   ================================================================ */
+function adjustTime(delta) {
+  tripTMax = Math.max(1, Math.min(18, tripTMax + delta));
+  document.getElementById('tmax').value = tripTMax;
+  document.getElementById('tmaxLbl').textContent = tripTMax + ' hrs';
+  refreshAll();
+  showToast((delta > 0 ? '⏱ +' : '⏱ ') + delta + 'h time budget', "#6366f1");
+}
+
+function adjustBudget(delta) {
+  tripBMax = Math.max(200, Math.min(15000, tripBMax + delta));
+  document.getElementById('bmax').value = tripBMax;
+  document.getElementById('bmaxLbl').textContent = '₹' + tripBMax;
+  refreshAll();
+  showToast((delta > 0 ? '💰 +₹' : '💰 -₹') + Math.abs(delta) + ' budget', "#22c55e");
+}
+
+function removeStop(routeIdx) {
+  if (routeIdx === 0) {
+    showToast("❌ Cannot remove the Start point. Change Start in the left sidebar.", "#ef4444");
+    return;
+  }
+  const removedName = rPOIs[editRoute[routeIdx]].name;
+  editRoute.splice(routeIdx, 1);
+  refreshAll();
+  showToast(`🗑 Removed: ${removedName}`, "#f59e0b");
+}
+
+function replanFrom(routeIdx) {
+  // Re-runs the RL agent starting from the current intermediate stop
+  let loc = editRoute[routeIdx];
+  let clock = 9.0;
+  let tRem = tripTMax;
+  let bRem = tripBMax;
+  const visited = new Set();
+
+  for (let i = 0; i <= routeIdx; i++) {
+    visited.add(editRoute[i]);
+    if (i > 0) {
+      tRem -= timeMat[editRoute[i - 1]][editRoute[i]];
+      bRem -= costMat[editRoute[i - 1]][editRoute[i]];
+      clock += timeMat[editRoute[i - 1]][editRoute[i]];
+    }
+  }
+
+  if (tRem <= 0 || bRem <= 0) {
+    showToast("⚠️ Remaining time or budget is already exhausted!", "#ef4444");
+    return;
+  }
+
+  const w = Wn();
+  const effectiveEnd = (endMode === "roundtrip") ? editRoute[0] : (endMode === "specific" ? endPOIIndex : -1);
+  const res = runMODQNWithConstraints(w, tripTMax, tripBMax, loc, endMode, effectiveEnd, tRem, bRem, clock, visited);
+
+  // Keep prefix up to routeIdx, then append newly planned branch
+  editRoute = editRoute.slice(0, routeIdx + 1).concat(res.route.slice(1));
+  refreshAll();
+  showToast(`🔄 Re-planned from step ${routeIdx} using MO-DQN!`, "#6366f1");
+}
+
+function replanAll() {
+  generateRoute();
+}
+
+function clearRoute() {
+  editRoute = [startPOIIndex];
+  refreshAll();
+  showToast("Route cleared to start point only.", "#94a3b8");
+}
+
+/* ── ADD MODAL ── */
+let insertAfterIdx = -1;
+function openAddModal(afterIdx) {
+  insertAfterIdx = afterIdx;
+  document.getElementById('modalInsertLabel').textContent = `after ${rPOIs[editRoute[afterIdx]].name}`;
+  document.getElementById('modalSearch').value = '';
+  renderModalList();
+  document.getElementById('addModal').classList.remove('hidden');
+}
+function closeModal() { document.getElementById('addModal').classList.add('hidden'); }
+document.getElementById('addModal').addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
+
+function renderModalList() {
+  const q = document.getElementById('modalSearch').value.toLowerCase();
+  const vis = new Set(editRoute);
+  const avail = rPOIs.map((p, i) => ({ ...p, _li: i })).filter(p => !vis.has(p._li) && p.cat !== 'Origin');
+
+  let html = '';
+  avail.filter(p => p.name.toLowerCase().includes(q)).forEach(p => {
+    const col = CAT_COL[p.cat] || CAT_COL.Default;
+    html += `
+      <div class="poi-card flex items-center justify-between p-2 rounded-lg border border-[var(--border)] cursor-pointer text-xs"
+           onclick="doInsert(${p._li})">
+        <div class="flex items-center gap-2">
+          <div class="w-2.5 h-2.5 rounded-full" style="background:${col}"></div>
+          <div>
+            <div class="font-semibold">${p.name}</div>
+            <div class="text-[var(--muted-foreground)] text-[10px]">${p.cat} · ★ ${p.rating} · ${p.dwell}h dwell</div>
+          </div>
+        </div>
+        <div class="text-right font-semibold">
+          <div class="${p.fee === 0 ? 'text-green-500' : 'text-indigo-400'}">${p.fee === 0 ? 'Free' : '₹' + p.fee}</div>
+          <span class="text-xs text-[var(--primary)] font-bold">+ Insert</span>
+        </div>
+      </div>
+    `;
+  });
+  document.getElementById('modalList').innerHTML = html || '<div class="text-xs text-[var(--muted-foreground)] p-2">No matching attractions available.</div>';
+}
+
+function doInsert(poiLocalIdx) {
+  editRoute.splice(insertAfterIdx + 1, 0, poiLocalIdx);
+  closeModal();
+  refreshAll();
+  showToast(`✅ Added ${rPOIs[poiLocalIdx].name}`, "#22c55e");
+}
+
+function quickAppend(poiLocalIdx) {
+  if (editRoute.length === 0) {
+    showToast("Generate a route first!", "#ef4444");
+    return;
+  }
+  editRoute.push(poiLocalIdx);
+  refreshAll();
+  showToast(`✅ Appended: ${rPOIs[poiLocalIdx].name}`, "#22c55e");
+}
+
+function renderSidePanel() {
+  const q = (document.getElementById('sideSearch').value || '').toLowerCase();
+  const vis = new Set(editRoute);
+  const avail = rPOIs.map((p, i) => ({ ...p, _li: i })).filter(p => !vis.has(p._li) && p.cat !== 'Origin');
+
+  let html = '';
+  avail.filter(p => p.name.toLowerCase().includes(q)).forEach(p => {
+    const col = CAT_COL[p.cat] || CAT_COL.Default;
+    html += `
+      <div class="poi-card flex items-center justify-between p-2 rounded-lg border border-[var(--border)] cursor-pointer text-xs"
+           onclick="quickAppend(${p._li})">
+        <div class="flex items-center gap-2 truncate">
+          <div class="w-2 h-2 rounded-full shrink-0" style="background:${col}"></div>
+          <div class="truncate">
+            <div class="font-semibold truncate">${p.name}</div>
+            <div class="text-[10px] text-[var(--muted-foreground)]">★ ${p.rating} · ${p.fee === 0 ? 'Free' : '₹' + p.fee}</div>
+          </div>
+        </div>
+        <button class="text-emerald-500 font-bold shrink-0 ml-1 text-sm">+</button>
+      </div>
+    `;
+  });
+  document.getElementById('sidePanel').innerHTML = html || '<div class="text-xs text-[var(--muted-foreground)] p-2">All attractions visited.</div>';
+}
+
+/* ── TIMELINE ITINERARY STEPS ── */
+function renderEditSteps() {
+  if (editRoute.length === 0) {
+    document.getElementById('editSteps').innerHTML = '<p class="text-xs text-[var(--muted-foreground)] italic p-3">Generate a route first.</p>';
+    return;
+  }
+
+  let clock = 9.0;
+  let tRem = tripTMax;
+  let bRem = tripBMax;
+  const hm = h => {
+    const hr = Math.floor(h % 24).toString().padStart(2, '0');
+    const mm = Math.round((h % 1) * 60).toString().padStart(2, '0');
+    return `${hr}:${mm}`;
+  };
+
+  let html = '<div class="flex flex-col">';
+  for (let i = 0; i < editRoute.length; i++) {
+    const poi = rPOIs[editRoute[i]];
+    const col = CAT_COL[poi.cat] || CAT_COL.Default;
+
+    if (i > 0) {
+      const tc = timeMat[editRoute[i - 1]][editRoute[i]];
+      const cc = costMat[editRoute[i - 1]][editRoute[i]];
+      tRem -= tc;
+      bRem -= cc;
+      clock += tc;
+    }
+
+    const isStart = (i === 0);
+    const isEnd = (i === editRoute.length - 1 && editRoute.length > 1);
+
+    html += `
+      <div class="flex gap-2">
+        <div class="flex flex-col items-center" style="width:28px">
+          <div class="w-6 h-6 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0 mt-3 shadow-sm"
+               style="background:${isStart ? '#10b981' : (isEnd ? '#ef4444' : col)}">
+            ${isStart ? '🚩' : (isEnd ? '🏁' : i)}
+          </div>
+          ${i < editRoute.length - 1 ? '<div class="w-0.5 bg-[var(--border)] flex-1 min-h-[25px]"></div>' : ''}
+        </div>
+
+        <div class="flex-1 pb-3 pl-1">
+          <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-3 shadow-sm ${tRem < 0 || bRem < 0 ? 'border-red-400' : ''}">
+            <div class="flex items-start justify-between gap-2">
+              <div>
+                <div class="font-bold text-xs flex items-center gap-1.5">
+                  <span>${poi.name}</span>
+                  ${isStart ? '<span class="badge" style="background:#d1fae5;color:#065f46">START</span>' : ''}
+                  ${isEnd ? '<span class="badge" style="background:#fee2e2;color:#991b1b">FINISH</span>' : ''}
+                </div>
+                <div class="text-[11px] text-[var(--muted-foreground)] mt-0.5">
+                  ${poi.cat} · Arrive ${hm(clock)} ${poi.dwell > 0 ? `· Stay ${poi.dwell}h` : ''}
+                </div>
+              </div>
+              <div class="text-right text-xs shrink-0">
+                ${poi.rating > 0 ? `<div class="text-amber-500 font-bold">★ ${poi.rating}</div>` : ''}
+                <div class="${poi.fee === 0 ? 'text-green-500' : 'text-[var(--muted-foreground)]'}">
+                  ${poi.fee === 0 ? 'Free Entry' : '₹' + poi.fee}
+                </div>
+              </div>
+            </div>
+
+            <div class="flex gap-2 mt-2 items-center flex-wrap pt-1 border-t border-[var(--border)] text-xs">
+              <span class="${tRem < 0 ? 'text-red-500 font-bold' : 'text-[var(--muted-foreground)]'}">
+                ⏱ ${Math.max(0, tRem).toFixed(1)}h left
+              </span>
+              <span class="${bRem < 0 ? 'text-red-500 font-bold' : 'text-[var(--muted-foreground)]'} mr-auto">
+                💰 ₹${Math.max(0, Math.round(bRem))} left
+              </span>
+
+              ${!isStart ? `<button class="action-btn danger" onclick="removeStop(${i})">🗑 Remove</button>` : ''}
+              <button class="action-btn" onclick="openAddModal(${i})">➕ Add After</button>
+              ${i < editRoute.length - 1 ? `<button class="action-btn" onclick="replanFrom(${i})" title="Re-plan from this stop using MO-DQN">🔄 Re-plan Here</button>` : ''}
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+  html += '</div>';
+  document.getElementById('editSteps').innerHTML = html;
+}
+
+/* ── CHARTS & METRICS ── */
+function updateObjBreak(tot) {
+  const maxR = (editRoute.length - 1) * 5 || 1;
+  document.getElementById('objBreak').innerHTML = `
+    <div class="flex flex-col gap-3">
+      <div>
+        <div class="flex justify-between text-xs mb-1"><span>🌟 Satisfaction Rating</span><span class="font-mono font-semibold">${tot.totRat.toFixed(1)} / ${maxR}</span></div>
+        <div class="w-full bg-[var(--border)] rounded-full h-2"><div class="bar h-2 rounded-full" style="width:${Math.min(100, (tot.totRat / maxR) * 100)}%;background:#f59e0b"></div></div>
+      </div>
+      <div>
+        <div class="flex justify-between text-xs mb-1"><span>⏱ Time Allocation</span><span class="font-mono font-semibold">${tot.tUsed.toFixed(1)}h / ${tripTMax}h</span></div>
+        <div class="w-full bg-[var(--border)] rounded-full h-2"><div class="bar h-2 rounded-full" style="width:${Math.min(100, (tot.tUsed / tripTMax) * 100)}%;background:#6366f1"></div></div>
+      </div>
+      <div>
+        <div class="flex justify-between text-xs mb-1"><span>💰 Financial Expenditure</span><span class="font-mono font-semibold">₹${Math.round(tot.bUsed)} / ₹${tripBMax}</span></div>
+        <div class="w-full bg-[var(--border)] rounded-full h-2"><div class="bar h-2 rounded-full" style="width:${Math.min(100, (tot.bUsed / tripBMax) * 100)}%;background:#22c55e"></div></div>
+      </div>
+      <div class="pt-2 border-t border-[var(--border)] flex justify-between text-xs">
+        <span>🎯 Multi-Objective Pareto Score</span>
+        <span class="font-mono font-bold" style="color:var(--primary)">${tot.reward.toFixed(3)}</span>
+      </div>
+    </div>
+  `;
+}
+
+function compareAll() {
+  const w = Wn();
+  const algos = [
+    { name: 'Random Walk',        mode: 'random', col: '#94a3b8' },
+    { name: 'Greedy Heuristic',   mode: 'greedy', col: '#fb923c' },
+    { name: 'SO-DQN Baseline',    mode: 'sodqn',  col: '#c084fc' },
+    { name: 'Dueling MO-DQN (Ours)', mode: 'modqn',  col: '#6366f1' }
+  ];
+
+  const results = algos.map(a => {
+    const res = fullAgentRun(a.mode, w, tripTMax, tripBMax);
+    let rSum = 0;
+    for (let i = 1; i < res.route.length; i++) {
+      const tc = timeMat[res.route[i - 1]][res.route[i]];
+      const cc = costMat[res.route[i - 1]][res.route[i]];
+      const u = rPOIs[res.route[i]].rating / 5.0;
+      rSum += (w[0] * u * 2.5) - (w[1] * (tc / tripTMax) * 2.0) - (w[2] * (cc / tripBMax) * 2.0) + 0.15;
+    }
+    return { ...a, rSum, stops: res.route.length };
+  });
+
+  const maxR = Math.max(...results.map(r => r.rSum), 0.01);
+  const maxS = Math.max(...results.map(r => r.stops), 1);
+
+  let html = '<div class="flex flex-col gap-3">';
+  for (const r of results) {
+    const rp = Math.max(0, (r.rSum / maxR) * 100);
+    const sp = (r.stops / maxS) * 100;
+    html += `
+      <div class="text-xs">
+        <div class="flex justify-between font-semibold mb-1">
+          <span>${r.name}</span>
+          <span class="font-mono">${r.rSum.toFixed(2)} score · ${r.stops} stops</span>
+        </div>
+        <div class="flex gap-1 items-center mb-1">
+          <span class="w-16 text-[var(--muted-foreground)]">Reward</span>
+          <div class="flex-1 bg-[var(--border)] rounded-full h-2"><div class="bar h-2 rounded-full" style="width:${rp}%;background:${r.col}"></div></div>
+        </div>
+        <div class="flex gap-1 items-center">
+          <span class="w-16 text-[var(--muted-foreground)]">Stops</span>
+          <div class="flex-1 bg-[var(--border)] rounded-full h-2"><div class="bar h-2 rounded-full" style="width:${sp}%;background:${r.col}88"></div></div>
+        </div>
+      </div>
+    `;
+  }
+  html += '</div>';
+  document.getElementById('algoCmp').innerHTML = html;
+  switchTab('metrics');
+}
+
+/* ── SIMULATED CONVERGENCE PLOT ── */
+function drawConvergence() {
+  const cv = document.getElementById('convChart');
+  const cx = cv.getContext('2d');
+  const W = cv.width = cv.offsetWidth || 600, H = cv.height = 180;
+  cx.clearRect(0, 0, W, H);
+
+  const isDark = !document.documentElement.classList.contains('light');
+  const gc = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
+  const tc = isDark ? 'rgba(255,255,255,0.45)' : 'rgba(0,0,0,0.45)';
+  const pL = 42, pB = 30, pT = 15, pR = 15, ep = 2200;
+
+  const moData = [], soData = [];
+  let mv = 0, sv = 0;
+  for (let i = 0; i < ep; i++) {
+    const t = i / ep, noise = () => (Math.random() - 0.5) * 2.5;
+    mv = mv * 0.96 + (6.8 * (1 - Math.exp(-t * 4.5)) + noise()) * 0.04;
+    moData.push(mv);
+    if (i < 1200) {
+      sv = sv * 0.96 + (19 * (1 - Math.exp(-t * 6)) + noise()) * 0.04;
+      soData.push(sv);
+    }
+  }
+
+  const allY = [...moData, ...soData], yMin = Math.min(...allY) - 0.5, yMax = Math.max(...allY) + 0.5;
+  const xS = (W - pL - pR) / (ep - 1), yS = (H - pT - pB) / (yMax - yMin);
+  const tx = i => pL + i * xS, ty = v => H - pB - (v - yMin) * yS;
+
+  for (let v = Math.ceil(yMin); v <= Math.floor(yMax); v += 2) {
+    cx.strokeStyle = gc; cx.lineWidth = 1; cx.beginPath(); cx.moveTo(pL, ty(v)); cx.lineTo(W - pR, ty(v)); cx.stroke();
+    cx.fillStyle = tc; cx.font = '10px sans-serif'; cx.textAlign = 'right'; cx.fillText(v, pL - 4, ty(v) + 4);
+  }
+
+  function mavg(arr, k) { return arr.map((v, i, a) => { const sl = a.slice(Math.max(0, i - k), i + 1); return sl.reduce((s, x) => s + x, 0) / sl.length; }); }
+  const ma = mavg(moData, 60), sa = mavg(soData, 60);
+
+  cx.strokeStyle = 'rgba(192,132,252,0.85)'; cx.lineWidth = 2; cx.beginPath();
+  sa.forEach((v, i) => i === 0 ? cx.moveTo(tx(i), ty(v)) : cx.lineTo(tx(i), ty(v))); cx.stroke();
+
+  cx.strokeStyle = 'rgba(99,102,241,1)'; cx.lineWidth = 2.5; cx.beginPath();
+  ma.forEach((v, i) => i === 0 ? cx.moveTo(tx(i), ty(v)) : cx.lineTo(tx(i), ty(v))); cx.stroke();
+
+  cx.strokeStyle = isDark ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.25)'; cx.lineWidth = 1;
+  cx.beginPath(); cx.moveTo(pL, pT); cx.lineTo(pL, H - pB); cx.lineTo(W - pR, H - pB); cx.stroke();
+  cx.fillStyle = tc; cx.font = '10px sans-serif'; cx.textAlign = 'center';
+  [0, 500, 1000, 1500, 2000].forEach(e => { if (e < ep) cx.fillText(e, tx(e), H - pB + 14); });
+  cx.fillText('Episodes', W / 2, H - 2);
+
+  cx.textAlign = 'left';
+  cx.fillStyle = 'rgba(192,132,252,0.9)'; cx.fillRect(pL + 5, pT, 12, 4); cx.fillStyle = tc; cx.fillText('SO-DQN', pL + 20, pT + 4);
+  cx.fillStyle = 'rgba(99,102,241,1)'; cx.fillRect(pL + 80, pT, 12, 4); cx.fillStyle = tc; cx.fillText('Dueling MO-DQN', pL + 95, pT + 4);
+}
+
+/* ── 2D PARETO PLOT ── */
+function drawPareto(w, tMax, bMax) {
+  const cv = document.getElementById('paretoChart');
+  const cx = cv.getContext('2d');
+  const W = cv.width = cv.offsetWidth || 700, H = cv.height = 300;
+  cx.clearRect(0, 0, W, H);
+
+  const isDark = !document.documentElement.classList.contains('light');
+  const gc = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
+  const tc = isDark ? 'rgba(255,255,255,0.45)' : 'rgba(0,0,0,0.45)';
+  const pL = 45, pB = 40, pT = 20, pR = 20;
+
+  const samples = Array.from({ length: 35 }, () => {
+    const a = Math.random(), b = Math.random() * (1 - a);
+    return [a, b, 1 - a - b];
+  });
+
+  const algos = [
+    { name: 'Random', mode: 'random', col: '#94a3b8' },
+    { name: 'Greedy', mode: 'greedy', col: '#fb923c' },
+    { name: 'SO-DQN', mode: 'sodqn',  col: '#c084fc' },
+    { name: 'MO-DQN', mode: 'modqn',  col: '#6366f1' }
+  ];
+
+  const allPts = {};
+  for (const a of algos) {
+    allPts[a.mode] = samples.map(s => {
+      const r = fullAgentRun(a.mode, s, tMax, bMax);
+      return { x: r.totRat, y: r.bUsed };
+    });
+  }
+
+  const allX = Object.values(allPts).flat().map(p => p.x);
+  const allY = Object.values(allPts).flat().map(p => p.y);
+  const xMax = Math.max(...allX, 1) + 2;
+  const yMax = Math.max(...allY, 1) + 200;
+
+  const toX = v => pL + (v / xMax) * (W - pL - pR);
+  const toY = v => H - pB - (v / yMax) * (H - pT - pB);
+
+  for (let v = 0; v <= xMax; v += 10) { cx.strokeStyle = gc; cx.lineWidth = 1; cx.beginPath(); cx.moveTo(toX(v), pT); cx.lineTo(toX(v), H - pB); cx.stroke(); }
+  for (let v = 0; v <= yMax; v += 500) { cx.strokeStyle = gc; cx.lineWidth = 1; cx.beginPath(); cx.moveTo(pL, toY(v)); cx.lineTo(W - pR, toY(v)); cx.stroke(); }
+
+  cx.fillStyle = tc; cx.font = '10px sans-serif';
+  [0, 10, 20, 30, 40].forEach(v => { if (v <= xMax) { cx.textAlign = 'center'; cx.fillText(v, toX(v), H - pB + 14); } });
+  [0, 500, 1000, 1500].forEach(v => { if (v <= yMax) { cx.textAlign = 'right'; cx.fillText('₹' + v, pL - 4, toY(v) + 4); } });
+
+  for (const a of algos) {
+    cx.fillStyle = a.col;
+    for (const p of allPts[a.mode]) {
+      cx.beginPath();
+      cx.arc(toX(p.x), toY(p.y), a.mode === 'modqn' ? 5 : 3.5, 0, Math.PI * 2);
+      cx.globalAlpha = a.mode === 'modqn' ? 0.85 : 0.5;
+      cx.fill();
+    }
+  }
+  cx.globalAlpha = 1;
+
+  cx.strokeStyle = isDark ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.25)'; cx.lineWidth = 1;
+  cx.beginPath(); cx.moveTo(pL, pT); cx.lineTo(pL, H - pB); cx.lineTo(W - pR, H - pB); cx.stroke();
+  cx.fillStyle = tc; cx.textAlign = 'center'; cx.font = '11px sans-serif';
+  cx.fillText('Total Satisfaction (Stars)', W / 2, H - 4);
+  cx.save(); cx.translate(12, H / 2); cx.rotate(-Math.PI / 2); cx.fillText('Total Cost (₹)', 0, 0); cx.restore();
+
+  let lx = pL + 5, ly = pT + 5;
+  for (const a of algos) {
+    cx.fillStyle = a.col; cx.beginPath(); cx.arc(lx + 4, ly, 4, 0, Math.PI * 2); cx.fill();
+    cx.fillStyle = tc; cx.font = '10px sans-serif'; cx.textAlign = 'left'; cx.fillText(a.name, lx + 12, ly + 4); lx += 75;
+  }
+}
+
+/* ── BARYCENTRIC TRIANGLE ── */
+function drawTriangle() {
+  const c = document.getElementById('triCanvas'), cx = c.getContext('2d');
+  const W = c.width, H = c.height; cx.clearRect(0, 0, W, H);
+  const v0 = { x: W / 2, y: 6 }, v1 = { x: W - 6, y: H - 6 }, v2 = { x: 6, y: H - 6 };
+
+  cx.beginPath(); cx.moveTo(v0.x, v0.y); cx.lineTo(v1.x, v1.y); cx.lineTo(v2.x, v2.y); cx.closePath();
+  cx.fillStyle = 'rgba(99,102,241,0.06)'; cx.fill(); cx.strokeStyle = 'var(--border)'; cx.lineWidth = 1.5; cx.stroke();
+
+  cx.font = '9px sans-serif'; cx.fillStyle = 'var(--muted-foreground)'; cx.textAlign = 'center';
+  cx.fillText('w₁', v0.x, v0.y - 2); cx.fillText('w₂', v1.x + 7, v1.y + 2); cx.fillText('w₃', v2.x - 7, v2.y + 2);
+
+  const w = Wn();
+  const px = w[0] * v0.x + w[1] * v1.x + w[2] * v2.x;
+  const py = w[0] * v0.y + w[1] * v1.y + w[2] * v2.y;
+
+  cx.beginPath(); cx.arc(px, py, 4.5, 0, Math.PI * 2);
+  cx.fillStyle = 'var(--primary,#6366f1)'; cx.fill(); cx.strokeStyle = 'white'; cx.lineWidth = 1.5; cx.stroke();
+}
+
+/* ── TOAST MESSAGES ── */
+let toastTimer = null;
+function showToast(msg, color = '#6366f1') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.background = color;
+  t.style.color = 'white';
+  t.classList.remove('hidden');
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.add('hidden'), 3200);
+}
+
+/* ── TAB SWITCHING ── */
+function switchTab(name) {
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.toggle('hidden', !p.id.endsWith(name)));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+
+  if (name === 'map') {
+    setTimeout(() => {
+      mc.width = container.offsetWidth;
+      mc.height = container.offsetHeight;
+      drawMap(editRoute.length ? { route: editRoute } : null);
+    }, 50);
+  }
+  if (name === 'metrics') drawConvergence();
+  if (name === 'pareto') {
+    const tMax = parseFloat(document.getElementById('tmax').value);
+    const bMax = parseFloat(document.getElementById('bmax').value);
+    drawPareto(Wn(), tMax, bMax);
+  }
+}
+
+/* ── INIT ── */
+window.addEventListener('load', () => {
+  onRegionChange();
+  drawTriangle();
+  resetMapView();
+  drawConvergence();
+});
+
+window.addEventListener('resize', () => {
+  if (!document.getElementById('tab-map').classList.contains('hidden')) {
+    mc.width = container.offsetWidth;
+    mc.height = container.offsetHeight;
+    drawMap(editRoute.length ? { route: editRoute } : null);
+  }
+});
+</script>
+</body>
+</html>

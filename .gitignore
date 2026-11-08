@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+*.whl
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Virtual Environments
+venv/
+env/
+.venv/
+.env/
+
+# PyTorch model checkpoints
+*.pt
+*.pth
+*.ckpt
+
+# Output files
+*.png
+*.jpg
+kerala_morl_dashboard.png
+
+# IDE
+.vscode/
+.idea/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
