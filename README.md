@@ -182,8 +182,8 @@ For Google Colab (notebook automatically installs on first cell run):
 
 ```bash
 # Clone the repository
-git clone https://github.com/kanuriakash/MORL-Kerala-Tourism.git
-cd MORL-Kerala-Tourism
+git clone https://github.com/akash-k1909/MORL-Tourist-Route-Planning-Kerala.git
+cd MORL-Tourist-Route-Planning-Kerala
 
 # Install dependencies
 pip install torch gymnasium numpy pandas matplotlib seaborn
